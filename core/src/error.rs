@@ -33,6 +33,13 @@ pub enum ExitReason {
 	Fatal(ExitFatal),
 }
 
+use std::fmt;
+impl fmt::Display for ExitReason {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+       write!(f, "{:?}", self)
+    }
+}
+
 impl ExitReason {
 	/// Whether the exit is succeeded.
 	pub fn is_succeed(&self) -> bool {

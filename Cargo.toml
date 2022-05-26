@@ -22,6 +22,8 @@ ethereum = { version = ">= 0.10, <= 0.11", default-features = false }
 environmental = { version = "1.1.2", default-features = false, optional = true }
 scale-info = { version = "1.0.0", default-features = false, features = ["derive"], optional = true }
 auto_impl = "0.5.0"
+sqlite = "0.26.0"
+hex = "0.4.3"
 
 [dev-dependencies]
 criterion = "0.3"
@@ -42,6 +44,11 @@ tracing = [
   "evm-gasometer/tracing",
   "evm-runtime/tracing"
 ]
+
+[[bin]]
+name = "quarkevm"
+path = "src/quarkevm.rs"
+doc = false
 
 [workspace]
 members = [
