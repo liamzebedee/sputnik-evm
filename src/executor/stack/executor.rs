@@ -1115,6 +1115,7 @@ impl<'config, 'precompiles, S: StackState<'config>, P: PrecompileSet> Handler
 	}
 
 	fn set_storage(&mut self, address: H160, index: H256, value: H256) -> Result<(), ExitError> {
+		dbg!(address, index, value);
 		self.state.set_storage(address, index, value);
 		Ok(())
 	}

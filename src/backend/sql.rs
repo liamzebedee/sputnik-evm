@@ -2,6 +2,13 @@ use super::{Apply, ApplyBackend, Backend, Basic, Log};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use primitive_types::{H160, H256, U256};
+use sqlite::{Connection};
+
+// use leveldb::database::{Database};
+// use leveldb::kv::KV;
+// use leveldb::options::{Options, WriteOptions};
+use sqlite::State;
+
 
 /// Vivinity value of a memory backend.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,18 +58,57 @@ pub struct MemoryAccount {
 	pub code: Vec<u8>,
 }
 
+
 /// Memory backend, storing all state values in a `BTreeMap` in memory.
-#[derive(Clone, Debug)]
+
 pub struct MemoryBackend<'vicinity> {
+	// db: Database<[u8]>,
+	db: Connection,
 	vicinity: &'vicinity MemoryVicinity,
 	state: BTreeMap<H160, MemoryAccount>,
 	logs: Vec<Log>,
 }
 
+use core::fmt::{Debug, Formatter};
+
+impl Clone for MemoryBackend<'_> {
+	fn clone(&self) -> Self { todo!() }
+}
+
+impl Debug for MemoryBackend<'_> {
+	fn fmt(&self, _: &mut Formatter<'_>) -> Result<(), std::fmt::Error> { todo!() }
+}
+
+use std::{path::Path};
+
+
 impl<'vicinity> MemoryBackend<'vicinity> {
 	/// Create a new memory backend.
-	pub fn new(vicinity: &'vicinity MemoryVicinity, state: BTreeMap<H160, MemoryAccount>) -> Self {
+	pub fn new(vicinity: &'vicinity MemoryVicinity, state: BTreeMap<H160, MemoryAccount>, db_path: String) -> Self {
+		// let mut options = BackendOptions::new();
+		// options.create_if_missing = true;
+		
+		// let mut database = match Database::open::<&[u8]>(Path::new(&db_path), options) {
+		// 	Ok(db) => { db },
+		// 	Err(e) => { panic!("failed to open database: {:?}", e) }
+		// };
+
+		let connection = sqlite::open(db_path).unwrap();
+
+		// if true {
+		// 	// TODO: this will error out if the tables already exist.
+		// 	// This doesn't matter during development.
+			connection.execute(
+				"
+				CREATE TABLE code (address BLOB, value BLOB);
+				CREATE TABLE storage (address BLOB, idx BLOB, value BLOB);
+				CREATE TABLE accounts (address BLOB, balance BLOB, nonce BLOB);
+				"
+			);
+		// }
+
 		Self {
+			db: connection,
 			vicinity,
 			state,
 			logs: Vec::new(),
@@ -136,17 +182,42 @@ impl<'vicinity> Backend for MemoryBackend<'vicinity> {
 	}
 
 	fn code(&self, address: H160) -> Vec<u8> {
-		self.state
-			.get(&address)
-			.map(|v| v.code.clone())
-			.unwrap_or_default()
+		let address_hex = hex::encode(address);
+		let mut statement = self.db
+			.prepare(format!("SELECT * FROM code WHERE address = X'{address_hex}'"))
+			.unwrap();
+		
+		if let State::Row = statement.next().unwrap() {
+			let code = statement.read::<Vec<u8>>(1).unwrap();
+			return code
+		} else {
+			panic!("ah")
+		}
+
+		// self.state
+		// 	.get(&address)
+		// 	.map(|v| v.code.clone())
+		// 	.unwrap_or_default()
 	}
 
 	fn storage(&self, address: H160, index: H256) -> H256 {
-		self.state
-			.get(&address)
-			.map(|v| v.storage.get(&index).cloned().unwrap_or_default())
-			.unwrap_or_default()
+		let address_hex = hex::encode(address);
+		let index_hex = hex::encode(index);
+		let mut statement = self.db
+			.prepare(format!("SELECT * FROM storage WHERE address = X'{address_hex}' AND idx = X'{index_hex}'"))
+			.unwrap();
+		
+		if let State::Row = statement.next().unwrap() {
+			let value = statement.read::<Vec<u8>>(2).unwrap();
+			return H256::from_slice(&value)
+		} else {
+			panic!("ah")
+		}
+
+		// self.state
+		// 	.get(&address)
+		// 	.map(|v| v.storage.get(&index).cloned().unwrap_or_default())
+		// 	.unwrap_or_default()
 	}
 
 	fn original_storage(&self, address: H160, index: H256) -> Option<H256> {
@@ -168,37 +239,77 @@ impl<'vicinity> ApplyBackend for MemoryBackend<'vicinity> {
 					basic,
 					code,
 					storage,
-					reset_storage,
+					reset_storage: _,
 				} => {
 					let is_empty = {
+
+						let address_hex = hex::encode(address);
+
+						// 1. Borrow code
+						// 2. Unwrap Option<Vec<u8>> into Vec<u8>
+						// Usually we borrow using the & operator
+						// However we don't want to borrow the option, do we? 
+						if let Some(code) = &code {
+							let code_hex = hex::encode(code);
+						
+							// 1. Code.
+							self.db.execute(format!("
+								INSERT INTO code VALUES (X'{address_hex}', X'{code_hex}')
+							")).unwrap();
+						} else {
+							// None means leaving it unchanged. 
+						} 
+
+
 						let account = self.state.entry(address).or_insert_with(Default::default);
 						account.balance = basic.balance;
 						account.nonce = basic.nonce;
 						if let Some(code) = code {
 							account.code = code;
 						}
+						// if reset_storage {
+						// 	account.storage = BTreeMap::new();
+						// }
 
-						if reset_storage {
-							account.storage = BTreeMap::new();
-						}
+						// let zeros = account
+						// 	.storage
+						// 	.iter()
+						// 	.filter(|(_, v)| v == &&H256::default())
+						// 	.map(|(k, _)| *k)
+						// 	.collect::<Vec<H256>>();
 
-						let zeros = account
-							.storage
-							.iter()
-							.filter(|(_, v)| v == &&H256::default())
-							.map(|(k, _)| *k)
-							.collect::<Vec<H256>>();
+						// for zero in zeros {
+						// 	account.storage.remove(&zero);
+						// }
 
-						for zero in zeros {
-							account.storage.remove(&zero);
-						}
+						// 2. Account
+						let mut balance_buf: [u8; 32] = Default::default();
+						basic.balance.to_big_endian(&mut balance_buf);
 
+						let mut nonce_buf: [u8; 32] = Default::default();
+						basic.nonce.to_big_endian(&mut nonce_buf);
+
+						let balance_hex = hex::encode(balance_buf);
+						let nonce_hex = hex::encode(nonce_buf);
+						self.db.execute(format!("
+							INSERT INTO accounts VALUES (X'{address_hex}', X'{balance_hex}', X'{nonce_hex}')
+						")).unwrap();
+
+
+						// 3. Storage
 						for (index, value) in storage {
-							if value == H256::default() {
-								account.storage.remove(&index);
-							} else {
-								account.storage.insert(index, value);
-							}
+							let index_hex = hex::encode(&index);
+							let value_hex = hex::encode(&value);
+
+							self.db.execute(format!("
+								INSERT INTO storage VALUES (X'{address_hex}', X'{index_hex}', X'{value_hex}')
+							")).unwrap();
+
+							// if value == H256::default() {
+							// 	account.storage.remove(&index);
+							// } else {
+							// 	account.storage.insert(index, value);
+							// }
 						}
 
 						account.balance == U256::zero()
@@ -211,7 +322,21 @@ impl<'vicinity> ApplyBackend for MemoryBackend<'vicinity> {
 					}
 				}
 				Apply::Delete { address } => {
-					self.state.remove(&address);
+					// self.db.execute(format!("
+					// 	INSERT INTO storage VALUES ('{address_hex}', '{index_hex}', '{value_hex}')
+					// ")).unwrap();
+
+					let address_hex = hex::encode(address);
+					
+					self.db.execute(format!("
+						INSERT INTO code VALUES (X'{address_hex}', NULL)
+					")).unwrap();
+
+					self.db.execute(format!("
+						INSERT INTO accounts VALUES (X'{address_hex}', NULL, NULL)
+					")).unwrap();
+
+					// self.state.remove(&address);
 				}
 			}
 		}

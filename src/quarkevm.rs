@@ -2,7 +2,8 @@
 
 
 
-use evm::backend::{MemoryAccount, MemoryBackend, MemoryVicinity};
+use evm::backend::sql::{MemoryAccount, MemoryBackend, MemoryVicinity};
+// use evm::backend::{MemoryAccount, MemoryBackend, MemoryVicinity};
 use evm::executor::stack::{MemoryStackState, StackExecutor, StackSubstateMetadata};
 use evm::executor::{Executor};
 use evm::Config;
@@ -47,25 +48,13 @@ let mut state = BTreeMap::new();
 
 */
 
-fn create_schema() {
-	// connection
-    // .execute(
-    //     "
-    //     CREATE TABLE users (name TEXT, age INTEGER);
-    //     INSERT INTO users VALUES ('Alice', 42);
-    //     INSERT INTO users VALUES ('Bob', 69);
-    //     ",
-    // )
-    // .unwrap();
-}
+
+use evm::backend::ApplyBackend;
+use ethereum::Log;
 
 fn execute_in_vm(
 	params: SendTransactionParams
 ) {
-	// Load database.
-	let connection = sqlite::open(
-		Path::new(DATABASE_FILE)
-	).unwrap();
 
 	let config = Config::istanbul();
 
@@ -82,11 +71,21 @@ fn execute_in_vm(
 		block_base_fee_per_gas: U256::zero(),
 	};
 	
-	let mut state = BTreeMap::new();
+	let mut bstate = BTreeMap::new();
+	bstate.insert(
+		H160::from_str("0xf000000000000000000000000000000000000000").unwrap(),
+		MemoryAccount {
+			nonce: U256::one(),
+			balance: U256::from(10000000),
+			storage: BTreeMap::new(),
+			code: Vec::new(),
+		},
+	);
 
 	println!("quarkevm version {}", VERSION);
 
-	let backend = MemoryBackend::new(&vicinity, state);
+	// let backend = MemoryBackend::new(&vicinity, state);
+	let mut backend = MemoryBackend::new(&vicinity, bstate, DATABASE_FILE.to_string());
 	let metadata = StackSubstateMetadata::new(u64::MAX, &config);
 	let state = MemoryStackState::new(metadata, &backend);
 	let precompiles = BTreeMap::new();
@@ -103,6 +102,7 @@ fn execute_in_vm(
 			100000000000u64, // gas limit
 			Vec::new(), // access list
 		);
+		
 		println!("{:?}", _reason);
 
 	} else {
@@ -117,6 +117,25 @@ fn execute_in_vm(
 		);
 		println!("{:?}", _reason);
 	}
+
+	// LEARN: 
+	// Why does into_state work here, but state_mut() doesn't?
+	// 	error[E0507]: cannot move out of a mutable reference
+	//    --> src/quarkevm.rs:120:24
+	//     |
+	// 120 |     let (applies, logs) = executor.state_mut().deconstruct();
+	//     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ move occurs because value has type `MemoryStackState<'_, '_, evm::backend::sql::MemoryBackend<'_>>`, which does not implement the `Copy` trait
+	let (applies, logs) = executor.into_state().deconstruct();
+
+	// dbg!(
+	// 	applies
+	// );
+	
+	// dbg!(&logs.into_iter()
+    //     .map(|item| format!("{item}"))
+    //     .collect::<String>());
+	
+	backend.apply(applies, logs, false);
 
 	println!("Done!");
 }

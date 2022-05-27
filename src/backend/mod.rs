@@ -2,7 +2,8 @@
 //!
 //! Backends store state information of the VM, and exposes it to runtime.
 
-mod memory;
+pub mod memory;
+pub mod sql;
 
 pub use self::memory::{MemoryAccount, MemoryBackend, MemoryVicinity};
 
