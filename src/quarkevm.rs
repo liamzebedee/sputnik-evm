@@ -4,9 +4,16 @@
 
 use evm::backend::{MemoryAccount, MemoryBackend, MemoryVicinity};
 use evm::executor::stack::{MemoryStackState, StackExecutor, StackSubstateMetadata};
+use evm::executor::{Executor};
 use evm::Config;
 use primitive_types::{H160, U256};
 use std::{collections::BTreeMap, str::FromStr};
+use std::path::Path;
+
+use std::sync::{Arc, Mutex};
+
+use sqlite;
+
 
 
 // Backend
@@ -14,23 +21,11 @@ const DATABASE_FILE: &str = "chain.sqlite";
 const VERSION: &str = "0.0.1";
 
 
-fn main() {
-	let config = Config::istanbul();
+/*
+mock state 
 
-	let vicinity = MemoryVicinity {
-		gas_price: U256::zero(),
-		origin: H160::default(),
-		block_hashes: Vec::new(),
-		block_number: Default::default(),
-		block_coinbase: Default::default(),
-		block_timestamp: Default::default(),
-		block_difficulty: Default::default(),
-		block_gas_limit: Default::default(),
-		chain_id: U256::one(),
-		block_base_fee_per_gas: U256::zero(),
-	};
 
-	let mut state = BTreeMap::new();
+let mut state = BTreeMap::new();
 	state.insert(
 		H160::from_str("0x1000000000000000000000000000000000000000").unwrap(),
 		MemoryAccount {
@@ -50,6 +45,45 @@ fn main() {
 		},
 	);
 
+*/
+
+fn create_schema() {
+	// connection
+    // .execute(
+    //     "
+    //     CREATE TABLE users (name TEXT, age INTEGER);
+    //     INSERT INTO users VALUES ('Alice', 42);
+    //     INSERT INTO users VALUES ('Bob', 69);
+    //     ",
+    // )
+    // .unwrap();
+}
+
+fn execute_in_vm(
+	params: SendTransactionParams
+) {
+	// Load database.
+	let connection = sqlite::open(
+		Path::new(DATABASE_FILE)
+	).unwrap();
+
+	let config = Config::istanbul();
+
+	let vicinity = MemoryVicinity {
+		gas_price: U256::zero(),
+		origin: H160::default(),
+		block_hashes: Vec::new(),
+		block_number: Default::default(),
+		block_coinbase: Default::default(),
+		block_timestamp: Default::default(),
+		block_difficulty: Default::default(),
+		block_gas_limit: Default::default(),
+		chain_id: U256::one(),
+		block_base_fee_per_gas: U256::zero(),
+	};
+	
+	let mut state = BTreeMap::new();
+
 	println!("quarkevm version {}", VERSION);
 
 	let backend = MemoryBackend::new(&vicinity, state);
@@ -58,36 +92,189 @@ fn main() {
 	let precompiles = BTreeMap::new();
 	let mut executor = StackExecutor::new_with_precompiles(state, &config, &precompiles);
 
-	
-	
-	/*
+	if params.to == "" {
+		// Create call.
+		let _reason = executor.transact_create(
+			H160::from_str(&params.from).unwrap(),
+			// H160::from_str(&params.value).unwrap(),
+			U256::zero(), // value
+			hex::decode(&params.data)
+				.unwrap(),
+			100000000000u64, // gas limit
+			Vec::new(), // access list
+		);
+		println!("{:?}", _reason);
 
-	mut self,
-	caller: H160,
-	address: H160,
-	value: U256,
-	data: Vec<u8>,
-	gas_limit: u64,
-	access_list: Vec<(H160, Vec<H256>)>,
-
-	*/
-
-	let _reason = executor.transact_call(
-		H160::from_str("0xf000000000000000000000000000000000000000").unwrap(),
-		H160::from_str("0x1000000000000000000000000000000000000000").unwrap(),
-		U256::zero(),
-		// (base) ➜  hardhat-tutorial git:(master) ✗ cast calldata "setGreeting(string memory)" "foo"
-		// 0xa413686200000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000003666f6f0000000000000000000000000000000000000000000000000000000000
-		hex::decode("a413686200000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000003666f6f0000000000000000000000000000000000000000000000000000000000")
-			.unwrap(),
-		// hex::decode("0f14a4060000000000000000000000000000000000000000000000000000000000002ee0").unwrap(),
-		100000000000u64,
-		Vec::new(),
-	);
-
-	println!("{:?}", _reason);
+	} else {
+		let _reason = executor.transact_call(
+			H160::from_str(&params.from).unwrap(),
+			H160::from_str(&params.to).unwrap(),
+			U256::zero(), // value
+			hex::decode(&params.data)
+				.unwrap(),
+			100000000000u64, // gas limit
+			Vec::new(),
+		);
+		println!("{:?}", _reason);
+	}
 
 	println!("Done!");
 }
 
 
+
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SendTransactionParams {
+	from: String,
+	to: String,
+	gas: String,
+	gasPrice: String,
+	value: String,
+	data: String
+}
+
+use std::{path::PathBuf};
+use serde::{Deserialize, Serialize};
+use serde_json::{Result, Number, Value};
+use clap::{Parser, ValueHint};
+
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    #[clap(
+        help = "A path to the database.",
+        long,
+        value_hint = ValueHint::FilePath
+    )]
+    pub db_path: PathBuf,
+
+    #[clap(short, long)]
+    pub data: String,
+}
+
+fn run() -> Result<u8> {
+	let args = Args::parse();
+
+	// Decode args.
+	let mut params: SendTransactionParams = serde_json::from_str(&args.data)?;
+	params.from = params.from.strip_prefix("0x").unwrap().to_string();
+	params.to = params.to.strip_prefix("0x").unwrap().to_string();
+	params.data = params.data.strip_prefix("0x").unwrap().to_string();
+
+	// Execute.
+	execute_in_vm(params);
+
+	Ok(0)
+}
+
+fn main() {
+    run().unwrap();
+}
+
+
+
+
+// use tide::Request;
+// use tide::prelude::*;
+
+// #[derive(Debug, Deserialize)]
+// struct JSONRpcRequest {
+//     id: String,
+// 	jsonrpc: String,
+// 	method: String,
+// 	params: 
+//     : u8,
+// }
+
+// #[async_std::main]
+// async fn run_rpc_server() -> tide::Result<()> {
+//     let mut app = tide::new();
+//     app.at("/").post(handle_rpc_request);
+//     app.listen("127.0.0.1:8569").await?;
+//     Ok(())
+// }
+
+// async fn handle_rpc_request(mut req: Request<()>) -> tide::Result {
+//     let Animal { name, legs } = req.body_json().await?;
+//     Ok(format!("Hello, {}! I've put in an order for {} shoes", name, legs).into())
+// }
+
+
+// Persistent storage in sqlite.
+
+// use jsonrpc_http_server::jsonrpc_core::{IoHandler, Value, Params};
+// use jsonrpc_http_server::ServerBuilder;
+// use serde::de::DeserializeOwned;
+// use serde::{self, Serialize, Deserialize}; // 1.0.104
+
+
+// use serde_json::{json, Error};
+// use serde_json::map::Map;
+
+
+// use jsonrpc_core::Result;
+// use jsonrpc_derive::rpc;
+
+// pub struct RpcImpl {
+
+// }
+
+// impl RpcImpl {
+// 	fn eth_call(&self) -> Result<u64> {
+// 		Ok(0)
+// 	}
+
+// 	fn eth_send_transaction(&self, params: SendTransactionParams) -> Result<String> {
+// 		// let mut parsed = params.parse::<SendTransactionParams>().unwrap();
+// 		let mut parsed = params.clone();
+		
+// 		parsed.from = params.from.strip_prefix("0x").unwrap().to_string();
+// 		parsed.data = params.data.strip_prefix("0x").unwrap().to_string();
+
+// 		// TODO validate parsed.from signature.
+
+// 		// now execute the transaction.
+// 		// let executor = executor_ref.lock().unwrap();
+
+		// let _reason = executor.transact_call(
+		// 	H160::from_str(&parsed.from).unwrap(),
+		// 	H160::from_str(&parsed.to).unwrap(),
+		// 	U256::zero(), // value
+		// 	hex::decode(&parsed.data)
+		// 		.unwrap(),
+		// 	100000000000u64, // gas limit
+		// 	Vec::new(),
+		// );
+
+// 		// println!("{:?}", _reason);
+
+// 		Ok(hex::encode("hello").to_owned())
+// 	}
+// }
+
+
+// fn run_rpc_server() {
+// 	// let executor_ref = Arc::new(Mutex::new(executor));
+	
+// 	let mut rpc_server = &RpcImpl{};
+// 	let mut io = jsonrpc_core::IoHandler::new();
+	
+// 	io.add_method("eth_call", |_params: Params| async {
+// 		Ok(Value::String(hex::encode("hello").to_owned()))
+// 	});
+	
+// 	io.add_method("eth_sendTransaction", |_params: Params| async {
+// 		let mut parsed = _params.parse::<SendTransactionParams>().unwrap();
+// 		let res = rpc_server.eth_send_transaction(parsed).unwrap();
+// 		Ok(Value::String(res))
+// 	});
+
+// 	let server = ServerBuilder::new(io)
+// 		.threads(1)
+// 		.start_http(&"127.0.0.1:8549".parse().unwrap())
+// 		.unwrap();
+
+// 	server.wait();
+// }

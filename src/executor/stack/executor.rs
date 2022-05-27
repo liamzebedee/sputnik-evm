@@ -4,6 +4,9 @@ use crate::{
 	Capture, Config, Context, CreateScheme, ExitError, ExitReason, ExitSucceed, Handler, Opcode,
 	Runtime, Transfer,
 };
+use crate::executor::{
+	Executor
+};
 use alloc::{
 	collections::{BTreeMap, BTreeSet},
 	rc::Rc,
@@ -313,6 +316,110 @@ pub struct StackExecutor<'config, 'precompiles, S, P> {
 	precompile_set: &'precompiles P,
 }
 
+impl<'config, 'precompiles, S: StackState<'config>, P: PrecompileSet> 
+	Executor for StackExecutor<'config, 'precompiles, S, P> 
+{
+	/// Execute a `CALL` transaction with a given caller, address, value and
+	/// gas limit and data.
+	///
+	/// Takes in an additional `access_list` parameter for EIP-2930 which was
+	/// introduced in the Ethereum Berlin hard fork. If you do not wish to use
+	/// this functionality, just pass in an empty vector.
+	fn transact_call(
+		&mut self,
+		caller: H160,
+		address: H160,
+		value: U256,
+		data: Vec<u8>,
+		gas_limit: u64,
+		access_list: Vec<(H160, Vec<H256>)>,
+	) -> (ExitReason, Vec<u8>) {
+		event!(TransactCall {
+			caller,
+			address,
+			value,
+			data: &data,
+			gas_limit,
+		});
+
+		let transaction_cost = gasometer::call_transaction_cost(&data, &access_list);
+		let gasometer = &mut self.state.metadata_mut().gasometer;
+		match gasometer.record_transaction(transaction_cost) {
+			Ok(()) => (),
+			Err(e) => return emit_exit!(e.into(), Vec::new()),
+		}
+
+		// Initialize initial addresses for EIP-2929
+		if self.config.increase_state_access_gas {
+			let addresses = core::iter::once(caller).chain(core::iter::once(address));
+			self.state.metadata_mut().access_addresses(addresses);
+
+			self.initialize_with_access_list(access_list);
+		}
+
+		self.state.inc_nonce(caller);
+
+		let context = Context {
+			caller,
+			address,
+			apparent_value: value,
+		};
+
+		match self.call_inner(
+			address,
+			Some(Transfer {
+				source: caller,
+				target: address,
+				value,
+			}),
+			data,
+			Some(gas_limit),
+			false,
+			false,
+			false,
+			context,
+		) {
+			Capture::Exit((s, v)) => emit_exit!(s, v),
+			Capture::Trap(_) => unreachable!(),
+		}
+	}
+
+	/// Execute a `CREATE` transaction.
+	fn transact_create(
+		&mut self,
+		caller: H160,
+		value: U256,
+		init_code: Vec<u8>,
+		gas_limit: u64,
+		access_list: Vec<(H160, Vec<H256>)>, // See EIP-2930
+	) -> (ExitReason, Vec<u8>) {
+		event!(TransactCreate {
+			caller,
+			value,
+			init_code: &init_code,
+			gas_limit,
+			address: self.create_address(CreateScheme::Legacy { caller }),
+		});
+
+		if let Err(e) = self.record_create_transaction_cost(&init_code, &access_list) {
+			return emit_exit!(e.into(), Vec::new());
+		}
+		self.initialize_with_access_list(access_list);
+
+		match self.create_inner(
+			caller,
+			CreateScheme::Legacy { caller },
+			value,
+			init_code,
+			Some(gas_limit),
+			false,
+		) {
+			Capture::Exit((s, _, v)) => emit_exit!(s, v),
+			Capture::Trap(_) => unreachable!(),
+		}
+	}
+}
+
 impl<'config, 'precompiles, S: StackState<'config>, P: PrecompileSet>
 	StackExecutor<'config, 'precompiles, S, P>
 {
@@ -388,41 +495,6 @@ impl<'config, 'precompiles, S: StackState<'config>, P: PrecompileSet>
 		gasometer.record_transaction(transaction_cost)
 	}
 
-	/// Execute a `CREATE` transaction.
-	pub fn transact_create(
-		&mut self,
-		caller: H160,
-		value: U256,
-		init_code: Vec<u8>,
-		gas_limit: u64,
-		access_list: Vec<(H160, Vec<H256>)>, // See EIP-2930
-	) -> (ExitReason, Vec<u8>) {
-		event!(TransactCreate {
-			caller,
-			value,
-			init_code: &init_code,
-			gas_limit,
-			address: self.create_address(CreateScheme::Legacy { caller }),
-		});
-
-		if let Err(e) = self.record_create_transaction_cost(&init_code, &access_list) {
-			return emit_exit!(e.into(), Vec::new());
-		}
-		self.initialize_with_access_list(access_list);
-
-		match self.create_inner(
-			caller,
-			CreateScheme::Legacy { caller },
-			value,
-			init_code,
-			Some(gas_limit),
-			false,
-		) {
-			Capture::Exit((s, _, v)) => emit_exit!(s, v),
-			Capture::Trap(_) => unreachable!(),
-		}
-	}
-
 	/// Execute a `CREATE2` transaction.
 	pub fn transact_create2(
 		&mut self,
@@ -465,71 +537,6 @@ impl<'config, 'precompiles, S: StackState<'config>, P: PrecompileSet>
 			false,
 		) {
 			Capture::Exit((s, _, v)) => emit_exit!(s, v),
-			Capture::Trap(_) => unreachable!(),
-		}
-	}
-
-	/// Execute a `CALL` transaction with a given caller, address, value and
-	/// gas limit and data.
-	///
-	/// Takes in an additional `access_list` parameter for EIP-2930 which was
-	/// introduced in the Ethereum Berlin hard fork. If you do not wish to use
-	/// this functionality, just pass in an empty vector.
-	pub fn transact_call(
-		&mut self,
-		caller: H160,
-		address: H160,
-		value: U256,
-		data: Vec<u8>,
-		gas_limit: u64,
-		access_list: Vec<(H160, Vec<H256>)>,
-	) -> (ExitReason, Vec<u8>) {
-		event!(TransactCall {
-			caller,
-			address,
-			value,
-			data: &data,
-			gas_limit,
-		});
-
-		let transaction_cost = gasometer::call_transaction_cost(&data, &access_list);
-		let gasometer = &mut self.state.metadata_mut().gasometer;
-		match gasometer.record_transaction(transaction_cost) {
-			Ok(()) => (),
-			Err(e) => return emit_exit!(e.into(), Vec::new()),
-		}
-
-		// Initialize initial addresses for EIP-2929
-		if self.config.increase_state_access_gas {
-			let addresses = core::iter::once(caller).chain(core::iter::once(address));
-			self.state.metadata_mut().access_addresses(addresses);
-
-			self.initialize_with_access_list(access_list);
-		}
-
-		self.state.inc_nonce(caller);
-
-		let context = Context {
-			caller,
-			address,
-			apparent_value: value,
-		};
-
-		match self.call_inner(
-			address,
-			Some(Transfer {
-				source: caller,
-				target: address,
-				value,
-			}),
-			data,
-			Some(gas_limit),
-			false,
-			false,
-			false,
-			context,
-		) {
-			Capture::Exit((s, v)) => emit_exit!(s, v),
 			Capture::Trap(_) => unreachable!(),
 		}
 	}
