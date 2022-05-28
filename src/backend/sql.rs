@@ -3,10 +3,6 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use primitive_types::{H160, H256, U256};
 use sqlite::{Connection};
-
-// use leveldb::database::{Database};
-// use leveldb::kv::KV;
-// use leveldb::options::{Options, WriteOptions};
 use sqlite::State;
 
 
@@ -79,33 +75,34 @@ impl Debug for MemoryBackend<'_> {
 	fn fmt(&self, _: &mut Formatter<'_>) -> Result<(), std::fmt::Error> { todo!() }
 }
 
-use std::{path::Path};
-
-
 impl<'vicinity> MemoryBackend<'vicinity> {
 	/// Create a new memory backend.
-	pub fn new(vicinity: &'vicinity MemoryVicinity, state: BTreeMap<H160, MemoryAccount>, db_path: String) -> Self {
-		// let mut options = BackendOptions::new();
-		// options.create_if_missing = true;
-		
-		// let mut database = match Database::open::<&[u8]>(Path::new(&db_path), options) {
-		// 	Ok(db) => { db },
-		// 	Err(e) => { panic!("failed to open database: {:?}", e) }
-		// };
-
+	pub fn new(vicinity: &'vicinity MemoryVicinity, state: BTreeMap<H160, MemoryAccount>, db_path: String, genesis: bool) -> Self {
 		let connection = sqlite::open(db_path).unwrap();
 
-		// if true {
-		// 	// TODO: this will error out if the tables already exist.
-		// 	// This doesn't matter during development.
+		if genesis {
 			connection.execute(
 				"
-				CREATE TABLE code (address BLOB, value BLOB);
-				CREATE TABLE storage (address BLOB, idx BLOB, value BLOB);
-				CREATE TABLE accounts (address BLOB, balance BLOB, nonce BLOB);
+				CREATE TABLE code (
+					time INTEGER PRIMARY KEY AUTOINCREMENT, 
+					address BLOB, 
+					value BLOB
+				);
+				CREATE TABLE storage (
+					time INTEGER PRIMARY KEY AUTOINCREMENT, 
+					address BLOB, 
+					idx BLOB, 
+					value BLOB
+				);
+				CREATE TABLE accounts (
+					time INTEGER PRIMARY KEY AUTOINCREMENT, 
+					address BLOB, 
+					balance BLOB, 
+					nonce BLOB
+				);
 				"
-			);
-		// }
+			).unwrap();
+		}
 
 		Self {
 			db: connection,
@@ -172,26 +169,54 @@ impl<'vicinity> Backend for MemoryBackend<'vicinity> {
 	}
 
 	fn basic(&self, address: H160) -> Basic {
-		self.state
-			.get(&address)
-			.map(|a| Basic {
-				balance: a.balance,
-				nonce: a.nonce,
-			})
-			.unwrap_or_default()
+		let address_hex = hex::encode(address);
+		
+		let mut statement = self.db
+			.prepare(format!("
+				SELECT * FROM accounts 
+				WHERE address = X'{address_hex}' 
+				ORDER BY time DESC LIMIT 1
+			"))
+			.unwrap();
+		
+		if let State::Row = statement.next().unwrap() {
+			let balance = statement.read::<Vec<u8>>(2).unwrap();
+			let nonce = statement.read::<Vec<u8>>(3).unwrap();
+			return Basic{
+				balance: U256::from_big_endian(&balance),
+				nonce: U256::from_big_endian(&nonce),
+			}
+		} else {
+			return Basic{
+				balance: U256::zero(),
+				nonce: U256::zero()
+			}
+		}
+
+		// self.state
+		// 	.get(&address)
+		// 	.map(|a| Basic {
+		// 		balance: a.balance,
+		// 		nonce: a.nonce,
+		// 	})
+		// 	.unwrap_or_default()
 	}
 
 	fn code(&self, address: H160) -> Vec<u8> {
 		let address_hex = hex::encode(address);
 		let mut statement = self.db
-			.prepare(format!("SELECT * FROM code WHERE address = X'{address_hex}'"))
+			.prepare(format!("
+				SELECT * FROM code 
+				WHERE address = X'{address_hex}'
+				ORDER BY time DESC LIMIT 1
+			"))
 			.unwrap();
 		
 		if let State::Row = statement.next().unwrap() {
-			let code = statement.read::<Vec<u8>>(1).unwrap();
+			let code = statement.read::<Vec<u8>>(2).unwrap();
 			return code
 		} else {
-			panic!("ah")
+			return vec![]
 		}
 
 		// self.state
@@ -204,14 +229,20 @@ impl<'vicinity> Backend for MemoryBackend<'vicinity> {
 		let address_hex = hex::encode(address);
 		let index_hex = hex::encode(index);
 		let mut statement = self.db
-			.prepare(format!("SELECT * FROM storage WHERE address = X'{address_hex}' AND idx = X'{index_hex}'"))
+			.prepare(format!("
+				SELECT * FROM storage 
+				WHERE 
+					address = X'{address_hex}' 
+					AND idx = X'{index_hex}'
+				ORDER BY time DESC LIMIT 1
+			"))
 			.unwrap();
 		
 		if let State::Row = statement.next().unwrap() {
-			let value = statement.read::<Vec<u8>>(2).unwrap();
+			let value = statement.read::<Vec<u8>>(3).unwrap();
 			return H256::from_slice(&value)
 		} else {
-			panic!("ah")
+			return H256::zero();
 		}
 
 		// self.state
@@ -254,7 +285,7 @@ impl<'vicinity> ApplyBackend for MemoryBackend<'vicinity> {
 						
 							// 1. Code.
 							self.db.execute(format!("
-								INSERT INTO code VALUES (X'{address_hex}', X'{code_hex}')
+								INSERT INTO code VALUES (NULL, X'{address_hex}', X'{code_hex}')
 							")).unwrap();
 						} else {
 							// None means leaving it unchanged. 
@@ -292,7 +323,7 @@ impl<'vicinity> ApplyBackend for MemoryBackend<'vicinity> {
 						let balance_hex = hex::encode(balance_buf);
 						let nonce_hex = hex::encode(nonce_buf);
 						self.db.execute(format!("
-							INSERT INTO accounts VALUES (X'{address_hex}', X'{balance_hex}', X'{nonce_hex}')
+							INSERT INTO accounts VALUES (NULL, X'{address_hex}', X'{balance_hex}', X'{nonce_hex}')
 						")).unwrap();
 
 
@@ -302,7 +333,7 @@ impl<'vicinity> ApplyBackend for MemoryBackend<'vicinity> {
 							let value_hex = hex::encode(&value);
 
 							self.db.execute(format!("
-								INSERT INTO storage VALUES (X'{address_hex}', X'{index_hex}', X'{value_hex}')
+								INSERT INTO storage VALUES (NULL, X'{address_hex}', X'{index_hex}', X'{value_hex}')
 							")).unwrap();
 
 							// if value == H256::default() {

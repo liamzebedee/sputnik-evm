@@ -11,3 +11,4 @@ target
 tests.bin
 Cargo.lock
 *.sqlite
+out.bin
