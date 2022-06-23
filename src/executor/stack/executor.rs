@@ -84,11 +84,7 @@ pub struct StackSubstateMetadata<'config> {
 
 impl<'config> StackSubstateMetadata<'config> {
 	pub fn new(gas_limit: u64, config: &'config Config) -> Self {
-		let accessed = if config.increase_state_access_gas {
-			Some(Accessed::default())
-		} else {
-			None
-		};
+		let accessed = Some(Accessed::default());
 		Self {
 			gasometer: Gasometer::new(gas_limit, config),
 			is_static: false,
@@ -414,7 +410,10 @@ impl<'config, 'precompiles, S: StackState<'config>, P: PrecompileSet>
 			Some(gas_limit),
 			false,
 		) {
-			Capture::Exit((s, _, v)) => emit_exit!(s, v),
+			Capture::Exit((s, address, v)) => {
+				println!("contract created {:?}", address);
+				emit_exit!(s, v)
+			},
 			Capture::Trap(_) => unreachable!(),
 		}
 	}
@@ -1115,7 +1114,7 @@ impl<'config, 'precompiles, S: StackState<'config>, P: PrecompileSet> Handler
 	}
 
 	fn set_storage(&mut self, address: H160, index: H256, value: H256) -> Result<(), ExitError> {
-		dbg!(address, index, value);
+		// dbg!(address, index, value);
 		self.state.set_storage(address, index, value);
 		Ok(())
 	}

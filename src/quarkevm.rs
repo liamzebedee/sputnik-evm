@@ -1,10 +1,13 @@
 
 
 use evm::backend::sql::{MemoryAccount, MemoryBackend, MemoryVicinity};
-use evm::executor::stack::{MemoryStackState, StackExecutor, StackSubstateMetadata};
+// use evm::backend::memory::{MemoryAccount, MemoryBackend, MemoryVicinity};
+use std::fs;
+use evm::executor::stack::{MemoryStackState, StackExecutor, StackSubstateMetadata, StackState};
 use evm::executor::{Executor};
 use evm::Config;
 use primitive_types::{H160, U256};
+use std::fmt::Debug;
 use std::{collections::BTreeMap, str::FromStr};
 use evm::backend::ApplyBackend;
 use std::env;
@@ -13,14 +16,16 @@ use std::fs::File;
 use std::io::prelude::*;
 
 // Backend
-const DATABASE_FILE: &str = "chain.sqlite";
+const DATABASE_FILE: &str = "file:chain.sqlite?cache=shared";
 const VERSION: &str = "0.0.2";
 
 
 fn execute_in_vm(
 	params: SendTransactionParams,
 	write: bool,
-	output_file: &Path
+	output_file: &Path,
+	db_path: &Path,
+	state_leaves_file: &Path,
 ) {
 
 	let config = Config::istanbul();
@@ -62,7 +67,8 @@ fn execute_in_vm(
 
 	println!("quarkevm version {}", VERSION);
 
-	let mut backend = MemoryBackend::new(&vicinity, bstate, DATABASE_FILE.to_string(), db_genesis);
+	let mut backend = MemoryBackend::new(&vicinity, bstate, db_path.to_str().unwrap().to_string(), db_genesis);
+	// let mut backend = MemoryBackend::new(&vicinity, bstate);
 	let metadata = StackSubstateMetadata::new(u64::MAX, &config);
 	let state = MemoryStackState::new(metadata, &backend);
 	let precompiles = BTreeMap::new();
@@ -92,23 +98,47 @@ fn execute_in_vm(
 			100000000000u64, // gas limit
 			Vec::new(),
 		);
-		println!("{:?} {:?}", _reason, output);
 		let mut file = File::create(output_file).unwrap();
 		file.write_all(&output).unwrap();
 	}
 
-	// LEARN: 
-	// Why does into_state work here, but state_mut() doesn't?
-	// 	error[E0507]: cannot move out of a mutable reference
-	//    --> src/quarkevm.rs:120:24
-	//     |
-	// 120 |     let (applies, logs) = executor.state_mut().deconstruct();
-	//     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ move occurs because value has type `MemoryStackState<'_, '_, evm::backend::sql::MemoryBackend<'_>>`, which does not implement the `Copy` trait
-	let (applies, logs) = executor.into_state().deconstruct();
+	let state = executor.into_state();
+	
+	let accessed = state.metadata().accessed().as_ref().unwrap();
+	
+	let ad = accessed
+		.accessed_addresses
+		.iter()
+		.map(|a| format!("address {:?}", H160(a.0)))
+		.collect::<Vec<String>>()
+		.join("\n");
+	
+	let st = accessed
+		.accessed_storage
+		.iter()
+		.map(|a| format!("storage {:?} {:?}", a.0, a.1))
+		.collect::<Vec<String>>()
+		.join("\n");
+	
+	println!("{}", ad);
+	println!("{}", st);
+	let state_leaves_content = format!("{}\n{}", ad, st);
+	fs::write(state_leaves_file, state_leaves_content).expect("Unable to write file");
+
+	dbg!("{}", &accessed.accessed_addresses, &accessed.accessed_storage);
+
+	// let mut file = File::create(state_leaves_file).unwrap();
+	// file.write_all(&output).unwrap();
+
+	let (applies, logs) = state.deconstruct();
+
+	// let mut file = File::create(output_file).unwrap();
+	// file.write_all(&output).unwrap();
 
 	// dbg!(&logs.into_iter()
     //     .map(|item| format!("{item}"))
     //     .collect::<String>());
+
 	if write {
 		println!("Applying updates");
 		backend.apply(applies, logs, false);
@@ -156,6 +186,12 @@ struct Args {
     )]
     pub output_file: PathBuf,
 
+    #[clap(
+        help = "A path to write the state leaves accessed during a tx.",
+        long,
+        value_hint = ValueHint::FilePath
+    )]
+    pub state_leaves_file: PathBuf,
 
     #[clap(
         help = "If present, will flush writes to the DB.",
@@ -177,7 +213,7 @@ fn run() -> Result<u8> {
 	params.data = params.data.strip_prefix("0x").unwrap().to_string();
 
 	// Execute.
-	execute_in_vm(params, args.write, &args.output_file);
+	execute_in_vm(params, args.write, &args.output_file, &args.db_path.into_boxed_path(), &args.state_leaves_file);
 
 	Ok(0)
 }
