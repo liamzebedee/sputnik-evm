@@ -81,6 +81,29 @@ impl<'vicinity> MemoryBackend<'vicinity> {
 		let connection = sqlite::open(db_path).unwrap();
 
 		if genesis {
+			// connection.execute(
+			// 	"
+			// 	CREATE TABLE code (
+			// 		time INTEGER PRIMARY KEY AUTOINCREMENT, 
+			// 		address BLOB, 
+			// 		value BLOB
+			// 	);
+			// 	CREATE TABLE storage (
+			// 		time INTEGER PRIMARY KEY AUTOINCREMENT, 
+			// 		address BLOB, 
+			// 		idx BLOB, 
+			// 		value BLOB
+			// 	);
+			// 	CREATE TABLE accounts (
+			// 		time INTEGER PRIMARY KEY AUTOINCREMENT, 
+			// 		address BLOB, 
+			// 		balance BLOB, 
+			// 		nonce BLOB
+			// 	);
+			// 	"
+			// ).unwrap();
+			// TODO this upserts the schema if it doesn't already exist.
+			// I don't have the time for proper error handling here yet.
 			connection.execute(
 				"
 				CREATE TABLE code (
@@ -101,7 +124,7 @@ impl<'vicinity> MemoryBackend<'vicinity> {
 					nonce BLOB
 				);
 				"
-			).unwrap();
+			);
 		}
 
 		Self {
