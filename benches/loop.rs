@@ -4,8 +4,20 @@ use evm::executor::stack::{MemoryStackState, StackExecutor, StackSubstateMetadat
 use evm::Config;
 use primitive_types::{H160, U256};
 use std::{collections::BTreeMap, str::FromStr};
+use evm::executor::{Executor};
+
+
 
 fn run_loop_contract() {
+
+	
+
+	print!("hey")
+}
+
+fn criterion_benchmark(c: &mut Criterion) {
+
+
 	let config = Config::istanbul();
 
 	let vicinity = MemoryVicinity {
@@ -41,27 +53,35 @@ fn run_loop_contract() {
 		},
 	);
 
-	let backend = MemoryBackend::new(&vicinity, state);
+
+	let mut backend = MemoryBackend::new(&vicinity, state);
 	let metadata = StackSubstateMetadata::new(u64::MAX, &config);
 	let state = MemoryStackState::new(metadata, &backend);
 	let precompiles = BTreeMap::new();
 	let mut executor = StackExecutor::new_with_precompiles(state, &config, &precompiles);
 
-	let _reason = executor.transact_call(
-		H160::from_str("0xf000000000000000000000000000000000000000").unwrap(),
-		H160::from_str("0x1000000000000000000000000000000000000000").unwrap(),
-		U256::zero(),
-		hex::decode("0f14a4060000000000000000000000000000000000000000000000000000000000b71b00")
-			.unwrap(),
-		// hex::decode("0f14a4060000000000000000000000000000000000000000000000000000000000002ee0").unwrap(),
-		u64::MAX,
-		Vec::new(),
-	);
+
+	c.bench_function("loop contract", |b| {
+		let mut i = 0;
+		b.iter(|| {
+            i = i + 1;
+			let (_reason, output) = executor.transact_call(
+				H160::from_str("0xf000000000000000000000000000000000000000").unwrap(),
+				H160::from_str("0x1000000000000000000000000000000000000000").unwrap(),
+				U256::zero(),
+				hex::decode("0f14a4060000000000000000000000000000000000000000000000000000000000b71b00")
+					.unwrap(),
+				u64::MAX,
+				Vec::new(),
+			);
+			// run_loop_contract(executor)
+		})
+	});
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
-	c.bench_function("loop contract", |b| b.iter(|| run_loop_contract()));
+criterion_group!{
+	name = benches;
+	config = Criterion::default().sample_size(10);
+	targets = criterion_benchmark
 }
-
-criterion_group!(benches, criterion_benchmark);
 criterion_main!(benches);
